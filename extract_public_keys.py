@@ -1,10 +1,38 @@
 import os
-from blockcypher import get_address_full
+import time
+import requests
+from blockcypher import get_address_full, blockcypher_url
 
 # File containing addresses, one per line
 address_file = 'address.txt'
 # Output file to save the public keys
 output_file = 'public_keys.txt'
+# Maximum number of retries after hitting rate limit
+max_retries = 5
+
+def fetch_with_rate_limiting(url, params=None):
+    """Fetch data from the BlockCypher API with rate limiting."""
+    retries = 0
+
+    while retries < max_retries:
+        response = requests.get(url, params=params)
+
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 429:
+            retry_after = int(response.headers.get("Retry-After", 1))
+            print(f"Rate limit exceeded. Retrying after {retry_after} seconds...")
+            time.sleep(retry_after)
+            retries += 1
+        else:
+            response.raise_for_status()
+
+    raise Exception("Max retries exceeded for API request.")
+
+def get_address_data(address):
+    """Get address data with rate limiting."""
+    url = blockcypher_url('addrs') + '/' + address
+    return fetch_with_rate_limiting(url)
 
 def extract_public_key_from_script(script):
     """
@@ -27,7 +55,7 @@ def extract_public_key_from_script(script):
 def extract_and_compress_public_keys(address):
     try:
         # Fetch full address information including transactions
-        address_data = get_address_full(address)
+        address_data = get_address_data(address)
         found_public_keys = set()  # To store unique public keys
 
         # Check if 'txs' is in the data
