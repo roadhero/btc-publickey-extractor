@@ -1,7 +1,7 @@
 import os
 import time
 import requests
-from blockcypher import get_address_full, blockcypher_url
+from blockcypher import get_address_full
 
 # File containing addresses, one per line
 address_file = 'address.txt'
@@ -9,6 +9,11 @@ address_file = 'address.txt'
 output_file = 'public_keys.txt'
 # Maximum number of retries after hitting rate limit
 max_retries = 5
+
+# Manually define the BlockCypher API base URL
+BASE_URL = "https://api.blockcypher.com/v1/btc/main"
+# Time to wait between requests (in seconds)
+request_delay = 1  # Adjust this as needed to avoid hitting rate limits
 
 def fetch_with_rate_limiting(url, params=None):
     """Fetch data from the BlockCypher API with rate limiting."""
@@ -31,8 +36,17 @@ def fetch_with_rate_limiting(url, params=None):
 
 def get_address_data(address):
     """Get address data with rate limiting."""
-    url = blockcypher_url('addrs') + '/' + address
-    return fetch_with_rate_limiting(url)
+    url = f"{BASE_URL}/addrs/{address}"
+    data = fetch_with_rate_limiting(url)
+    time.sleep(request_delay)  # Introduce a delay between requests
+    return data
+
+def get_full_transaction_data(tx_hash):
+    """Get full transaction data by hash."""
+    url = f"{BASE_URL}/txs/{tx_hash}"
+    data = fetch_with_rate_limiting(url)
+    time.sleep(request_delay)  # Introduce a delay between requests
+    return data
 
 def extract_public_key_from_script(script):
     """
@@ -49,32 +63,34 @@ def extract_public_key_from_script(script):
     except IndexError:
         return None
     except Exception as e:
-        print(f"Unexpected error extracting public key: {e}")
         return None
 
 def extract_and_compress_public_keys(address):
     try:
-        # Fetch full address information including transactions
+        # Fetch address data
         address_data = get_address_data(address)
         found_public_keys = set()  # To store unique public keys
 
-        # Check if 'txs' is in the data
-        if 'txs' not in address_data:
+        # Check if 'txrefs' is in the data
+        if 'txrefs' not in address_data:
             return found_public_keys
 
-        # Iterate over transactions to find spent outputs
-        for tx in address_data['txs']:
-            for input in tx['inputs']:
+        # Retrieve and process each full transaction
+        for txref in address_data['txrefs']:
+            tx_hash = txref['tx_hash']
+            full_tx_data = get_full_transaction_data(tx_hash)
+
+            # Process each input in the transaction
+            for input in full_tx_data['inputs']:
                 if 'addresses' in input and address in input['addresses']:
-                    # Extract the public key from the scriptSig if available
                     if 'script' in input:
                         public_key = extract_public_key_from_script(input['script'])
                         if public_key:
                             found_public_keys.add(public_key)
+
         return found_public_keys
 
     except Exception as e:
-        print(f"Error processing address {address}: {e}")
         return set()
 
 def main():
@@ -84,6 +100,9 @@ def main():
 
     with open(address_file, 'r') as f:
         addresses = [line.strip() for line in f if line.strip()]
+
+    found_keys = []
+    not_found_keys = []
 
     with open(output_file, 'w') as out_file:
         for address in addresses:
@@ -95,12 +114,24 @@ def main():
 
             if public_keys:
                 print(f"Public key found for address: {address}")
+                found_keys.append(address)
                 for pk in public_keys:
                     out_file.write(f"{pk}\n")
             else:
                 print(f"No public key found for address: {address}")
+                not_found_keys.append(address)
 
-    print(f"Public keys have been written to {output_file}")
+    # Print summary
+    print("\nSummary:")
+    print("\nAddresses with public keys found:")
+    for address in found_keys:
+        print(address)
+
+    print("\nAddresses with no public keys found:")
+    for address in not_found_keys:
+        print(address)
+
+    print(f"\nPublic keys have been written to {output_file}")
 
 if __name__ == "__main__":
     main()
