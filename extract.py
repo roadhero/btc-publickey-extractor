@@ -3,6 +3,7 @@ import time
 import random
 import requests
 import sys
+from multiprocessing import Pool, TimeoutError
 
 # File containing addresses, one per line
 address_file = 'address.txt'
@@ -10,6 +11,8 @@ address_file = 'address.txt'
 output_file = 'public_keys.txt'
 # Maximum number of retries after hitting rate limit
 max_retries = 5
+# Time limit for processing each address (in seconds)
+processing_timeout = 15
 
 # Manually define the BlockCypher API base URL
 BASE_URL = "https://api.blockcypher.com/v1/btc/main"
@@ -79,7 +82,7 @@ def fetch_with_rate_limiting(url, params=None, proxy=None):
 
     while retries < max_retries:
         try:
-            response = requests.get(url, params=params, proxies=proxy)
+            response = requests.get(url, params=params, proxies=proxy, timeout=processing_timeout)
             if response.status_code == 200:
                 return response.json()
             elif response.status_code == 429:
@@ -159,6 +162,10 @@ def extract_and_compress_public_keys(address, proxy=None):
     except Exception as e:
         return None
 
+def process_address(address, proxy):
+    """Wrapper function to process an address within a timeout limit."""
+    return extract_and_compress_public_keys(address, proxy)
+
 def main():
     if not os.path.exists(address_file):
         print(f"The file {address_file} does not exist.")
@@ -182,10 +189,16 @@ def main():
             print(f"Processing address: {address}")
 
             while True:  # Keep trying until we process the address
-                public_keys = extract_and_compress_public_keys(address, proxy)
+                with Pool(1) as p:
+                    result = p.apply_async(process_address, (address, proxy))
+
+                    try:
+                        public_keys = result.get(timeout=processing_timeout)
+                    except TimeoutError:
+                        print(f"Processing timed out for address: {address}. Switching proxy.")
+                        public_keys = None
 
                 if public_keys is None:
-                    print(f"Switching proxy due to rate limit or proxy failure.")
                     proxy = get_random_alive_proxy(proxies)
                     if not proxy:
                         print("No more alive proxies available.")
